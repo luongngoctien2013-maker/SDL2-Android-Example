@@ -32,7 +32,7 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH) \
        /home/user/ANDROID/SDL2/SDL2_image-2.0.5
 
 # Add your <name>.c files here
-LOCAL_SRC_FILES := $(LOCAL_PATH)/parallax4.c
+LOCAL_SRC_FILES := $(LOCAL_PATH)/parallax4.cpp
 
 LOCAL_SHARED_LIBRARIES := hidapi SDL2 SDL2_image
 include $(BUILD_SHARED_LIBRARY)
