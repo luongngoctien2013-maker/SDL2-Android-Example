@@ -1,701 +1,251 @@
-/*
- * "Parallax Scrolling IV - Overdraw Elimination +"
- *
- *   Nghia             <nho@optushome.com.au>
- *   Randi J. Relander <rjrelander@users.sourceforge.net>
- *   David Olofson     <david@olofson.net>
- *
- * This software is released under the terms of the GPL.
- *
- * Contact authors for permission if you want to use this
- * software, or work derived from it, under other terms.
- */
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL.h>
+#include <string>
+#include <vector>
+#include <cmath>
+#include <ctime>
+#include <algorithm>
 
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
+// --- CẤU TRÚC ĐẠN BOSS ---
+struct Fireball {
+    float x, y, vx, vy;
+    int frame;
+};
+std::vector<Fireball> bossBullets;
 
-#include <SDL.h>
-#include <SDL_image.h>
-#include "images.h"
-#include "parallax4.h"
-
-
-/*----------------------------------------------------------
-	...some globals...
-----------------------------------------------------------*/
-
-/*
- * Foreground map.
- */
-map_data_t foreground_map = {
-/*	 0123456789ABCDEF */
-	"3333333333333333",
-	"3   2   3      3",
-	"3   222 3  222 3",
-	"3333 22     22 3",
-	"3       222    3",
-	"3   222 2 2  333",
-	"3   2 2 222    3",
-	"3   222      223",
-	"3        333   3",
-	"3  22 23 323  23",
-	"3  22 32 333  23",
-	"3            333",
-	"3 3  22 33     3",
-	"3    222  2  3 3",
-	"3  3     3   3 3",
-	"3333333333333333"
+struct Enemy {
+    float x; int hp, maxHp, type; 
+    bool active, isBoss, flip; float speed;
 };
 
-map_data_t single_map = {
-/*	 0123456789ABCDEF */
-	"3333333333333333",
-	"3000200030000003",
-	"3000222030022203",
-	"3333022000002203",
-	"3000000022200003",
-	"3000222020200333",
-	"3000202022200003",
-	"3000222000000223",
-	"3000000003330003",
-	"3002202303230023",
-	"3002203203330023",
-	"3000000000000333",
-	"3030022033000003",
-	"3000022200200303",
-	"3003000003000303",
-	"3333333333333333"
+struct ShopItem { 
+    std::string name; int price; SDL_Color col;
 };
 
-/*
- * Middle level map; where the planets are.
- */
-map_data_t middle_map = {
-/*	 0123456789ABCDEF */
-	"   1    1       ",
-	"           1   1",
-	"  1             ",
-	"     1  1    1  ",
-	"   1            ",
-	"         1      ",
-	" 1            1 ",
-	"    1   1       ",
-	"          1     ",
-	"   1            ",
-	"        1    1  ",
-	" 1          1   ",
-	"     1          ",
-	"        1       ",
-	"  1        1    ",
-	"                "
+struct DamageText {
+    float x, y;
+    int value;
+    int life;
 };
+std::vector<DamageText> dmgTexts;
 
-/*
- * Background map.
- */
-map_data_t background_map = {
-/*	 0123456789ABCDEF */
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000",
-	"0000000000000000"
-};
+// BIẾN GLOBAL
+int Gold = 0, MonstersKilled = 0, BossThreshold = 13;
+int MaxHP = 100, CurrentHP = 100, MaxEnergy = 50, CurrentEnergy = 50, Damage = 15, Armor = 0;
+float playerX = 100, playerY = 730, walkCycle = 0;
+float jumpV = 0; bool isJumping = false; 
+bool isAtk = false, isShopOpen = false, hasSword = false, hL = false, hR = false;
+int shopScrollY = 0, lastMouseY = 0;
+std::vector<Enemy> enemies;
+int spawnTimer = 0; 
+float kbV = 0; 
+bool hasHelmet = false, hasChest = false, hasPants = false, hasBoots = false;
+bool isHealing = false; int healTimer = 0; int healSpeed = 5; 
+enum JumpState { JUMP_START, JUMP_UP, JUMP_FALL, JUMP_LAND };
+JumpState jumpState = JUMP_LAND;
+float atkAngle = 0;
 
-int detect_runs = 1;
+// BIẾN ẢNH
+SDL_Texture* bossTex[5];
+SDL_Texture* fireTex[5];
+SDL_Texture* wolfTex = NULL;
+SDL_Texture* birdWalk1 = NULL;
+SDL_Texture* birdWalk2 = NULL;
+SDL_Texture* backgroundTex = NULL;
 
-
-/*----------------------------------------------------------
-	...and some code. :-)
-----------------------------------------------------------*/
-
-#define	TM_EMPTY	0
-#define	TM_KEYED	1
-#define	TM_OPAQUE	2
-
-/* Checks if tile is opaqe, empty or color keyed */
-int tile_mode(char tile)
-{
-	switch(tile)
-	{
-	  case '0':
-	  	return TM_OPAQUE;
-	  case '1':
-	  	return TM_KEYED;
-	  case '2':
-	  case '3':
-	  	return TM_OPAQUE;
-	  case '4':
-	  	return TM_KEYED;
-	}
-	return TM_EMPTY;
+// --- HÀM VẼ HÌNH TRÒN CHO ĐẦU ---
+void fillCircle(SDL_Renderer* r, int cx, int cy, int rad) {
+    for (int dy = -rad; dy <= rad; dy++) {
+        for (int dx = -rad; dx <= rad; dx++) {
+            if (dx*dx + dy*dy <= rad*rad) SDL_RenderDrawPoint(r, cx + dx, cy + dy);
+        }
+    }
 }
 
-int draw_tile(SDL_Surface *screen, SDL_Surface *tiles, int x, int y, char tile)
-{
-	SDL_Rect source_rect, dest_rect;
-
-	/* Study the following expression. Typo trap! :-) */
-	if(' ' == tile)
-		return 0;
-
-	source_rect.x = 0;	/* Only one column, so we never change this. */
-	source_rect.y = (tile - '0') * TILE_H;	/* Select tile from image! */
-	source_rect.w = TILE_W;
-	source_rect.h = TILE_H;
-
-	dest_rect.x = x;
-	dest_rect.y = y;
-
-	SDL_BlitSurface(tiles, &source_rect, screen, &dest_rect);
-
-	/* Return area rendered for statistics */
-	return dest_rect.w * dest_rect.h;
+// --- CÁC HÀM VẼ CHỮ VÀ SỐ ---
+void drawChar(SDL_Renderer* r, char c, int x, int y, int sz, SDL_Color col) {
+    SDL_SetRenderDrawColor(r, col.r, col.g, col.b, 255);
+    switch(toupper(c)) {
+        case 'A': SDL_RenderDrawLine(r, x, y+sz, x+sz/2, y); SDL_RenderDrawLine(r, x+sz/2, y, x+sz, y+sz); SDL_RenderDrawLine(r, x+sz/4, y+sz/2, x+3*sz/4, y+sz/2); break;
+        case 'B': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x, y, x+sz, y+sz/4); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+sz/4); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+3*sz/4); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+3*sz/4); break;
+        case 'C': SDL_RenderDrawLine(r, x+sz, y, x, y); SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz); break;
+        case 'D': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz/2); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz/2); break;
+        case 'E': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+sz/2); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz); break;
+        case 'G': SDL_RenderDrawLine(r, x+sz, y, x, y); SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz); SDL_RenderDrawLine(r, x+sz, y+sz, x+sz, y+sz/2); SDL_RenderDrawLine(r, x+sz/2, y+sz/2, x+sz, y+sz/2); break;
+        case 'H': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+sz/2); break;
+        case 'I': SDL_RenderDrawLine(r, x+sz/2, y, x+sz/2, y+sz); SDL_RenderDrawLine(r, x, y, x+sz, y); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz); break;
+        case 'K': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz/2, y, x+sz, y); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+sz); break;
+        case 'L': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz); break;
+        case 'M': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz); SDL_RenderDrawLine(r, x, y, x+sz/2, y+sz/2); SDL_RenderDrawLine(r, x+sz/2, y+sz/2, x+sz, y); break;
+        case 'N': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz); SDL_RenderDrawLine(r, x, y, x+sz, y+sz); break;
+        case 'O': { SDL_Rect ro={x,y,sz,sz}; SDL_RenderDrawRect(r, &ro); break; }
+        case 'P': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x, y, x+sz, y); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz/2); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+sz/2); break;
+        case 'Q': { SDL_Rect rq={x,y,sz,sz}; SDL_RenderDrawRect(r, &rq); SDL_RenderDrawLine(r, x+sz/2, y+sz/2, x+sz, y+sz); break; }
+        case 'S': SDL_RenderDrawLine(r, x+sz, y, x, y); SDL_RenderDrawLine(r, x, y, x, y+sz/2); SDL_RenderDrawLine(r, x, y+sz/2, x+sz, y+sz/2); SDL_RenderDrawLine(r, x+sz, y+sz/2, x+sz, y+sz); SDL_RenderDrawLine(r, x+sz, y+sz, x, y+sz); break;
+        case 'U': SDL_RenderDrawLine(r, x, y, x, y+sz); SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz); SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz); break;
+        case 'X': SDL_RenderDrawLine(r, x, y, x+sz, y+sz); SDL_RenderDrawLine(r, x+sz, y, x, y+sz); break;
+    }
 }
 
-int main(int argc, char* argv[])
-{
-	SDL_Window *window;
-	SDL_Surface	*screen;
-	SDL_Surface	*tiles_bmp;
-	SDL_Surface	*tiles, *otiles;
-	SDL_Rect	border;
-	layer_t		*layers;
-	SDL_Event	event;
-	int		bpp = 0,
-			flags = 0,
-			verbose = 0,
-			use_planets = 1,
-			num_of_layers = 7,
-			bounce_around = 0,
-			wrap = 0,
-			alpha = 0;
-	int		total_blits,
-			total_recursions,
-			total_pixels;
-	int		peak_blits = 0,
-			peak_recursions = 0,
-			peak_pixels = 0;
-	int		i;
-	long		tick1,
-			tick2;
-	float		dt;
-
-	SDL_Init(SDL_INIT_VIDEO);
-
-	atexit(SDL_Quit);
-
-	for(i = 1; i < argc; ++i)
-	{
-		if(strncmp(argv[i], "-v", 2) == 0)
-			verbose = argv[i][2] - '0';
-		else if(strncmp(argv[i], "-a", 2) == 0)
-			alpha = atoi(&argv[i][2]);
-		else if(strncmp(argv[i], "-b", 2) == 0)
-			bounce_around = 1;
-		else if(strncmp(argv[i], "-w", 2) == 0)
-			wrap = 1;
-		else if(strncmp(argv[i], "-l", 2) == 0)
-			num_of_layers = atoi(&argv[i][2]);
-		else if(strncmp(argv[i], "-np", 3) == 0)
-			use_planets = 0;
-		//else if(strncmp(argv[i], "-d", 2) == 0)
-			//flags |= SDL_DOUBLEBUF;
-		else if(strncmp(argv[i], "-f", 2) == 0)
-			flags |= SDL_WINDOW_FULLSCREEN;
-		else if(strncmp(argv[i], "-nr", 3) == 0)
-			detect_runs = 0;
-		else
-			bpp = atoi(&argv[i][1]);
-	}
-
-	layers = calloc(sizeof(layer_t), num_of_layers);
-	if (!layers)
-	{
-		fprintf(stderr, "Failed to allocate layers!\n");
-		exit(-1);
-	}
-
-	if ( !SDL_SetHint( SDL_HINT_RENDER_SCALE_QUALITY, "1" ))
-		printf( "Warning: Linear texture filtering not enabled!" );
-
-    flags |= SDL_WINDOW_SHOWN;
-    flags |= SDL_WINDOW_RESIZABLE;
-
-	window = SDL_CreateWindow("DeMo", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                        SCREEN_W, SCREEN_H, flags);
-	if (!window) printf("Failed to open main window!!!\n");
-
-	screen = SDL_GetWindowSurface(window);
-	//screen = SDL_SetVideoMode(SCREEN_W, SCREEN_H, bpp, flags);
-	if (!screen)
-	{
-		fprintf(stderr, "Failed to open window!\n");
-		exit(-1);
-	}
-
-	border = screen->clip_rect;
-	SDL_ShowCursor(0);
-
-    SDL_RWops *rwop = SDL_RWFromConstMem(imageRAW, sizeof(imageRAW)); 
-	tiles_bmp = IMG_Load_RW(rwop, 1); //SDL_LoadBMP("tiles.bmp");
-	if (!tiles_bmp)
-	{
-		fprintf(stderr, "Could not load graphics!\n");
-		exit(-1);
-	}
-	tiles = SDL_ConvertSurfaceFormat(tiles_bmp, SDL_GetWindowPixelFormat(window), 0);
-	otiles = SDL_ConvertSurfaceFormat(tiles_bmp, SDL_GetWindowPixelFormat(window), 0);
-	SDL_FreeSurface(tiles_bmp);
-
-	/* Set colorkey for non-opaque tiles to bright magenta */
-	SDL_SetColorKey(tiles, SDL_RLEACCEL,
-			SDL_MapRGB(tiles->format,255,0,255)); //SDL_SRCCOLORKEY
-	//if (alpha)
-	//	SDL_SetAlpha(tiles, SDL_RLEACCEL, alpha); //SDL_SRCALPHA
-
-	if (num_of_layers > 1)
-	{
-		/* Assign maps and tile palettes to parallax layers */
-		layer_init(&layers[0], &foreground_map, tiles, otiles);
-		for(i = 1; i < num_of_layers - 1; ++i)
-			if( (i & 1) && use_planets)
-				layer_init(&layers[i], &middle_map,
-						tiles, otiles);
-			else
-				layer_init(&layers[i], &foreground_map,
-						tiles, otiles);
-		layer_init(&layers[num_of_layers-1], &background_map,
-				tiles, otiles);
-		/*
-		 * Set up the depth order for the
-		 * recursive rendering algorithm.
-		 */
-		for(i = 0; i < num_of_layers - 1; ++i)
-			layer_next(&layers[i], &layers[i+1]);
-	}
-	else
-		layer_init(&layers[0], &single_map, tiles, otiles);
-
-	
-	if(bounce_around && (num_of_layers > 1))
-	{
-		for(i = 0; i < num_of_layers - 1; ++i)
-		{
-			float a = 1.0 + i * 2.0 * 3.1415 / num_of_layers;
-			float v = 200.0 / (i+1);
-			layer_vel(&layers[i], v * cos(a), v * sin(a));
-			if(!wrap)
-				layer_limit_bounce(&layers[i]);
-		}
-	}
-	else
-	{
-		/* Set foreground scrolling speed and enable "bounce mode" */
-		layer_vel(&layers[0], FOREGROUND_VEL_X, FOREGROUND_VEL_Y);
-		if(!wrap)
-			layer_limit_bounce(&layers[0]);
-
-		/* Link all intermediate levels to the foreground layer */
-		for(i = 1; i < num_of_layers - 1; ++i)
-			layer_link(&layers[i], &layers[0], 1.5 / (float)(i+1));
-	}
-
-	/* Get initial tick for time calculation */
-	tick1 = SDL_GetTicks();
-
-	while (SDL_PollEvent(&event) >= 0)
-	{
-		/* Click to exit */
-		if (event.type == SDL_MOUSEBUTTONDOWN)
-			break;
-
-		/*if (event.type & (SDL_KEYUP | SDL_KEYDOWN))
-		{
-			Uint16	*x, *y;
-			const Uint8	*keys = SDL_GetKeyboardState(NULL);
-			if(keys[SDLK_ESCAPE])
-				break;
-
-			if(keys[SDLK_LSHIFT] || keys[SDLK_RSHIFT])
-			{
-				x = &border.w;
-				y = &border.h;
-			}
-			else
-			{
-				x = &border.x;
-				y = &border.y;
-			}
-
-			if(keys[SDLK_UP])
-				-- *y;
-			else if(keys[SDLK_DOWN])
-				++ *y;
-			if(keys[SDLK_LEFT])
-				-- *x;
-			else if(keys[SDLK_RIGHT])
-				++ *x;
-		}*/
-
-		/* calculate time since last update */
-		tick2 = SDL_GetTicks();
-		dt = (tick2 - tick1) * 0.001f;
-		tick1 = tick2;
-
-		/* Set background velocity */
-		if(num_of_layers > 1)
-			layer_vel(&layers[num_of_layers - 1],
-					sin(tick1 * 0.00011f) * BACKGROUND_VEL,
-					cos(tick1 * 0.00013f) * BACKGROUND_VEL);
-
-		/* Animate all layers */
-		for(i = 0; i < num_of_layers; ++i)
-			layer_animate(&layers[i], dt);
-
-		/* Reset rendering statistics */
-		for(i = 0; i < num_of_layers; ++i)
-			layer_reset_stats(&layers[i]);
-
-		/* Render layers (recursive!) */
-		layer_render(&layers[0], screen, &border);
-
-		total_blits = 0;
-		total_recursions = 0;
-		total_pixels = 0;
-		if(verbose >= 1)
-			printf("\nlayer    blits recursions pixels\n");
-		if(verbose >= 3)
-			for(i = 0; i < num_of_layers; ++i)
-			{
-				printf("%4d %8d %8d %8d\n",
-						i,
-						layers[i].blits,
-						layers[i].recursions,
-						layers[i].pixels);
-			}
-
-		for(i = 0; i < num_of_layers; ++i)
-		{
-			total_blits += layers[i].blits;
-			total_recursions += layers[i].recursions;
-			total_pixels += layers[i].pixels;
-		}
-		if(total_blits > peak_blits)
-			peak_blits = total_blits;
-		if(total_recursions > peak_recursions)
-			peak_recursions = total_recursions;
-		if(total_pixels > peak_pixels)
-			peak_pixels = total_pixels;
-
-		if(verbose >= 2)
-			printf("TOTAL:%8d %8d %8d\n",
-					total_blits,
-					total_recursions,
-					total_pixels);
-		if(verbose >= 1)
-			printf("PEAK:%8d %8d %8d\n",
-					peak_blits,
-					peak_recursions,
-					peak_pixels);
-
-		/* Draw "title" tile in upper left corner */
-		SDL_SetClipRect(screen, NULL);
-		draw_tile(screen, tiles, 2, 2, '4');
-
-		/* make changes visible */
-		//SDL_Flip(screen);
-        SDL_UpdateWindowSurface(window);
-
-		/* let operating system breath */
-		SDL_Delay(1);
-	}
-
-	printf("Statistics: (All figures per rendered frame.)\n"
-			"\tblits = %d\n"
-			"\trecursions = %d\n"
-			"\tpixels = %d\n",
-			peak_blits,
-			peak_recursions,
-			peak_pixels);
-	SDL_FreeSurface(tiles);
-	exit(0);
+void drawString(SDL_Renderer* r, std::string s, int x, int y, int sz, SDL_Color col) {
+    for(int i=0; i<(int)s.length(); i++) drawChar(r, s[i], x + i*(sz+8), y, sz, col);
 }
 
-
-/*----------------------------------------------------------
-	layer_t functions
-----------------------------------------------------------*/
-
-/* Initialivze layer; set up map and tile graphics data. */
-void layer_init(layer_t *lr, map_data_t *map,
-		SDL_Surface *tiles, SDL_Surface *opaque_tiles)
-{
-	lr->next = NULL;
-	lr->pos_x = lr->pos_y = 0.0;
-	lr->vel_x = lr->vel_y = 0.0;
-	lr->map = map;
-	lr->tiles = tiles;
-	lr->opaque_tiles = opaque_tiles;
-	lr->link = NULL;
+void drawNum(SDL_Renderer* r, int num, int x, int y, int sz, SDL_Color col) {
+    std::string s = std::to_string(num); SDL_SetRenderDrawColor(r, col.r, col.g, col.b, 255);
+    for (char c : s) {
+        int n = c - '0';
+        if (n!=1 && n!=4) SDL_RenderDrawLine(r, x, y, x+sz, y);
+        if (n!=1 && n!=2 && n!=3 && n!=7) SDL_RenderDrawLine(r, x, y, x, y+sz);
+        if (n!=5 && n!=6) SDL_RenderDrawLine(r, x+sz, y, x+sz, y+sz);
+        if (n!=0 && n!=1 && n!=7) SDL_RenderDrawLine(r, x, y+sz, x+sz, y+sz);
+        if (n==0 || n==2 || n==6 || n==8) SDL_RenderDrawLine(r, x, y+sz, x, y+2*sz);
+        if (n!=2) SDL_RenderDrawLine(r, x+sz, y+sz, x+sz, y+2*sz);
+        if (n!=1 && n!=4 && n!=7) SDL_RenderDrawLine(r, x, y+2*sz, x+sz, y+2*sz);
+        x += sz + 10;
+    }
 }
 
-/* Tell a layer which layer is next, or under this layer */
-void layer_next(layer_t *lr, layer_t *next_lr)
-{
-	lr->next = next_lr;
+void drawBox(SDL_Renderer* r, int x, int y, int w, int h, SDL_Color c) {
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, 255); SDL_Rect rect = {x, y, w, h};
+    SDL_RenderFillRect(r, &rect); SDL_SetRenderDrawColor(r, 255, 255, 255, 255); SDL_RenderDrawRect(r, &rect);
 }
 
-/* Set position */
-void layer_pos(layer_t *lr, float x, float y)
-{
-	lr->pos_x = x;
-	lr->pos_y = y;
+void drawPlayer(SDL_Renderer* r, float px, float py, bool attacking,
+                bool hasSword, float cycle, int armor, bool jumping) {
+    int x = (int)px, y = (int)py;
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+    // THAY ĐỔI: Vẽ đầu hình tròn thay vì hình vuông
+    fillCircle(r, x, y-20, 12); 
+    
+    if (hasHelmet) { SDL_SetRenderDrawColor(r, 150, 150, 150, 255); SDL_Rect hel = {x-12, y-35, 24, 12}; SDL_RenderFillRect(r, &hel); }
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255); SDL_RenderDrawLine(r, x, y-10, x, y+25); 
+    if (hasChest) { SDL_SetRenderDrawColor(r, 130, 130, 130, 255); SDL_Rect chs = {x-8, y-5, 16, 25}; SDL_RenderFillRect(r, &chs); SDL_Rect shoulderL = {x-14, y-8, 10, 8}, shoulderR = {x+4, y-8, 10, 8}; SDL_RenderFillRect(r, &shoulderL); SDL_RenderFillRect(r, &shoulderR); SDL_SetRenderDrawColor(r, 0, 0, 0, 255); SDL_RenderDrawRect(r, &shoulderL); SDL_RenderDrawRect(r, &shoulderR); }
+    float legSwing = jumping ? 0 : sin(cycle) * 20;
+    int lx1 = x-10+legSwing, ly1 = y+70, lx2 = x+10-legSwing, ly2 = y+70;
+    if (jumping) { if (jumpState == JUMP_UP) { lx1=x-5; ly1=y+55; lx2=x+5; ly2=y+55; } else { lx1=x-10; ly1=y+75; lx2=x+10; ly2=y+75; } }
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255); SDL_RenderDrawLine(r, x, y+25, lx1, ly1); SDL_RenderDrawLine(r, x, y+25, lx2, ly2);
+    if (hasPants) { SDL_SetRenderDrawColor(r, 80, 80, 80, 255); for(int i=-3; i<=3; i++) { SDL_RenderDrawLine(r, x+i, y+25, lx1+i, ly1-5); SDL_RenderDrawLine(r, x+i, y+25, lx2+i, ly2-5); } }
+    if (hasBoots) { SDL_SetRenderDrawColor(r, 40, 40, 40, 255); SDL_Rect b1 = {lx1-7, ly1-4, 14, 10}, b2 = {lx2-7, ly2-4, 14, 10}; SDL_RenderFillRect(r, &b1); SDL_SetRenderDrawColor(r, 0,0,0,255); SDL_RenderDrawRect(r, &b1); SDL_SetRenderDrawColor(r, 40, 40, 40, 255); SDL_RenderFillRect(r, &b2); SDL_SetRenderDrawColor(r, 0,0,0,255); SDL_RenderDrawRect(r, &b2); }
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+    float armSwing = jumping ? 0 : sin(cycle + 3.14f) * 15;
+    if (attacking) {
+        float slashRad = (atkAngle - 45) * 3.14159f / 180.0f;
+        int handX = x + (int)(cos(slashRad)*25), handY = y + (int)(sin(slashRad)*25);
+        SDL_RenderDrawLine(r, x, y+5, handX, handY);
+        if (hasSword) { int swordEndX = handX + (int)(cos(slashRad)*55), swordEndY = handY + (int)(sin(slashRad)*55); SDL_SetRenderDrawColor(r, 200, 200, 200, 255); SDL_RenderDrawLine(r, handX, handY, swordEndX, swordEndY); SDL_SetRenderDrawColor(r, 0, 0, 0, 255); float pRad = slashRad + 1.57f; SDL_RenderDrawLine(r, handX+(int)(cos(pRad)*12), handY+(int)(sin(pRad)*12), handX-(int)(cos(pRad)*12), handY-(int)(sin(pRad)*12)); }
+    } else {
+        int hX = x+15-armSwing, hY = y+25; SDL_RenderDrawLine(r, x, y+5, x-15+armSwing, y+25); SDL_RenderDrawLine(r, x, y+5, hX, hY);
+        if (hasSword) { SDL_SetRenderDrawColor(r, 150, 150, 150, 255); SDL_RenderDrawLine(r, hX, hY, hX+15, hY+40); SDL_SetRenderDrawColor(r, 0, 0, 0, 255); SDL_RenderDrawLine(r, hX-8, hY+5, hX+12, hY+2); }
+    }
 }
 
-/* Set velocity */
-void layer_vel(layer_t *lr, float x, float y)
-{
-	lr->vel_x = x;
-	lr->vel_y = y;
+void drawMonster(SDL_Renderer* r, Enemy& e) {
+    int x = (int)e.x, gY = 800; SDL_Color red = {255, 0, 0}; 
+    SDL_RendererFlip flip = e.flip ? SDL_FLIP_NONE : SDL_FLIP_HORIZONTAL;
+    if (e.isBoss) {
+        int currentFrame = (SDL_GetTicks() / 150) % 5;
+        SDL_Rect bRect = {x - 130, gY - 260, 260, 260}; 
+        if(bossTex[currentFrame]) SDL_RenderCopy(r, bossTex[currentFrame], NULL, &bRect);
+        drawString(r, "BOSS", x-45, gY-280, 16, {0, 0, 0});
+        drawBox(r, x-70, gY-310, (int)(140.0f * e.hp / e.maxHp), 15, red);
+    }
+    else if (e.type == 3) {
+        int bY = gY - 220 + (int)(sin(SDL_GetTicks()*0.005)*25); 
+        drawBox(r, x-20, bY, 40, 30, {200, 0, 255}); 
+        SDL_SetRenderDrawColor(r, 0, 0, 0, 255); 
+        SDL_RenderDrawLine(r, x-20, bY, x-40, bY-20); SDL_RenderDrawLine(r, x+20, bY, x+40, bY-20); 
+        drawBox(r, x-40, bY-30, (int)(80.0f * e.hp / e.maxHp), 8, red); 
+    }
+    else if (e.type == 2) {
+        int frame = (SDL_GetTicks() / 150) % 2;
+        SDL_Rect bRect = {x - 45, gY - 90, 90, 90};
+        if (frame == 0) SDL_RenderCopyEx(r, birdWalk1, NULL, &bRect, 0, NULL, flip);
+        else SDL_RenderCopyEx(r, birdWalk2, NULL, &bRect, 0, NULL, flip);
+        drawBox(r, x-40, gY-95, (int)(80.0f * e.hp / e.maxHp), 10, red);
+    }
+    else {
+        SDL_Rect wRect = {x - 50, gY - 100, 100, 100}; 
+        if(wolfTex) SDL_RenderCopyEx(r, wolfTex, NULL, &wRect, 0, NULL, flip);
+        else drawBox(r, x-20, gY-80, 40, 20, red); 
+        drawBox(r, x-40, gY-120, (int)(80.0f * e.hp / e.maxHp), 10, red);
+    }
 }
 
-void __do_limit_bounce(layer_t *lr)
-{
-	int	maxx = MAP_W * TILE_W - SCREEN_W;
-	int	maxy = MAP_H * TILE_H - SCREEN_H;
-
-	if(lr->pos_x >= maxx)
-	{
-		/* v.out = - v.in */
-		lr->vel_x = -lr->vel_x;
-		/*
-		 * Mirror over right limit. We need to do this
-		 * to be totally accurate, as we're in a time
-		 * discreet system! Ain't that obvious...? ;-)
-		 */
-		lr->pos_x = maxx * 2 - lr->pos_x;
-	}
-	else if(lr->pos_x <= 0)
-	{
-		/* Basic physics again... */
-		lr->vel_x = -lr->vel_x;
-		/* Mirror over left limit */
-		lr->pos_x = -lr->pos_x;
-	}
-
-	if(lr->pos_y >= maxy)
-	{
-		lr->vel_y = -lr->vel_y;
-		lr->pos_y = maxy * 2 - lr->pos_y;
-	}
-	else if(lr->pos_y <= 0)
-	{
-		lr->vel_y = -lr->vel_y;
-		lr->pos_y = -lr->pos_y;
-	}
+void spawn(float x, int hp, float spd, int type) {
+    Enemy e; e.x = x; e.hp = e.maxHp = hp; e.speed = spd; e.type = type;
+    e.isBoss = (type == 0); e.active = true; e.flip = false; enemies.push_back(e);
 }
 
-/* Update animation (apply the velocity, that is) */
-void layer_animate(layer_t *lr, float dt)
-{
-	if(lr->flags & TL_LINKED)
-	{
-		lr->pos_x = lr->link->pos_x * lr->ratio;
-		lr->pos_y = lr->link->pos_y * lr->ratio;
-	}
-	else
-	{
-		lr->pos_x += dt * lr->vel_x;
-		lr->pos_y += dt * lr->vel_y;
-		if(lr->flags & TL_LIMIT_BOUNCE)
-			__do_limit_bounce(lr);
-	}
+std::vector<ShopItem> shopItems = { {"KIEM", 50, {100,100,100}}, {"MAU", 30, {200,0,0}}, {"NANG LUONG", 25, {0,0,200}}, {"MU GIAP", 40, {120,120,120}}, {"AO GIAP", 70, {120,120,120}}, {"QUAN GIAP", 60, {120,120,120}}, {"GIAY GIAP", 35, {120,120,120}} };
+
+int main(int argc, char* argv[]) {
+    srand(time(0)); SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window* win = SDL_CreateWindow("Epic Game", 0, 0, 750, 1420, 0);
+    SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+
+    backgroundTex = IMG_LoadTexture(ren, "/sdcard/Download/background.png");
+    wolfTex = IMG_LoadTexture(ren, "/sdcard/Download/wolf.png");
+    birdWalk1 = IMG_LoadTexture(ren, "/sdcard/Download/bird_walk1.png");
+    birdWalk2 = IMG_LoadTexture(ren, "/sdcard/Download/bird_walk2.png");
+
+    for (int i = 0; i < 5; i++) {
+        char bName[128]; sprintf(bName, "/sdcard/Download/boss_idle_%d.png", i + 1);
+        bossTex[i] = IMG_LoadTexture(ren, bName);
+        char fName[128]; sprintf(fName, "/sdcard/Download/fireball_%d.png", i + 1);
+        fireTex[i] = IMG_LoadTexture(ren, fName);
+    }
+
+    spawn(500, 200, 1.6f, 1);
+    bool run = true; SDL_Event ev; int dmgC = 0;
+    while (run) {
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) run = false;
+            if (ev.type == SDL_MOUSEBUTTONDOWN) {
+                lastMouseY = ev.button.y; int mx = ev.button.x, my = ev.button.y;
+                if (isShopOpen) { if (my > 700) isShopOpen = false; else { for(int i=0; i<(int)shopItems.size(); i++) { int itemY = 280 + i*95 + shopScrollY; if (mx > 80 && mx < 520 && my > itemY && my < itemY+85 && Gold >= shopItems[i].price) { Gold -= shopItems[i].price; if(i==0) { Damage += 20; hasSword = true; } else if(i==1) { MaxHP += 20; CurrentHP = MaxHP; isHealing = false; } else if(i==2) { MaxEnergy += 20; CurrentEnergy = MaxEnergy; } else if(i==3) { hasHelmet = true; Armor += 1; } else if(i==4) { hasChest = true; Armor += 2; } else if(i==5) { hasPants = true; Armor += 1; } else if(i==6) { hasBoots = true; Armor += 1; } } } } }
+                else { if (my < 100 && mx > 220 && mx < 370) isShopOpen = true; if (my >= 830) { if (mx >= 10 && mx <= 230) { if(my < 945) hL = true; } else if (mx >= 240 && mx <= 360) { if (my < 945 && !isJumping) { isJumping = true; jumpV = -20; jumpState = JUMP_START; } } else if (mx >= 310 && mx <= 590) { if (my < 945 && mx >= 370) hR = true; else if (my >= 950 && CurrentEnergy >= 10) { isAtk = true; CurrentEnergy -= 10; for(auto &e : enemies) if(e.active && std::abs(playerX - e.x) < 140 && (e.type != 3 || isJumping)) { e.hp -= Damage; dmgTexts.push_back({e.x, 700, Damage, 40}); if(e.hp <= 0) { e.active = false; Gold += (10+rand()%10); MonstersKilled++; isHealing = true; healTimer = 0; if(MonstersKilled > 0 && MonstersKilled % BossThreshold == 0) spawn(600, 1000, 0.8f, 0); } } } } } }
+            }
+            if (ev.type == SDL_MOUSEMOTION && isShopOpen && (ev.motion.state & SDL_BUTTON_LMASK)) { shopScrollY += (ev.motion.y - lastMouseY); lastMouseY = ev.motion.y; shopScrollY = std::min(0, std::max(shopScrollY, -400)); }
+            if (ev.type == SDL_MOUSEBUTTONUP) { hL = hR = isAtk = false; }
+        }
+
+        if (!isShopOpen) {
+            playerX += kbV; kbV *= 0.88f; 
+            if (hL) playerX -= 7; if (hR) playerX += 7;
+            if (!isJumping && (hL || hR)) walkCycle += 0.5;
+            if (isJumping) { playerY += jumpV; jumpV += 1.2f; if (jumpV < -5) jumpState = JUMP_UP; else if (jumpV > 5) jumpState = JUMP_FALL; if (playerY >= 730) { playerY = 730; isJumping = false; jumpV = 0; jumpState = JUMP_LAND; } }
+            if (isAtk) { atkAngle += 25; if (atkAngle > 120) atkAngle = 120; } else atkAngle = 0;
+            if (isHealing) { if (CurrentHP < MaxHP) { healTimer++; if (healTimer >= healSpeed) { CurrentHP++; healTimer = 0; } } else isHealing = false; }
+            if (CurrentEnergy < MaxEnergy) CurrentEnergy++; if (dmgC > 0) dmgC--;
+            for(auto &e : enemies) if(e.active && e.isBoss && (SDL_GetTicks() % 1200 < 20)) { float dx = playerX - e.x, dy = (playerY - 20) - 600.0f; float dist = sqrt(dx*dx + dy*dy); float speed = 9.0f; bossBullets.push_back({e.x, 600.0f, (dx/dist)*speed, (dy/dist)*speed, 0}); }
+            for(int i=0; i < (int)bossBullets.size(); i++) { bossBullets[i].x += bossBullets[i].vx; bossBullets[i].y += bossBullets[i].vy; SDL_Rect pRect = {(int)playerX-10, (int)playerY-30, 30, 100}; SDL_Rect fRect = {(int)bossBullets[i].x - 70, (int)bossBullets[i].y - 70, 140, 140}; if(SDL_HasIntersection(&pRect, &fRect)) { int fireDmg = 15 + (rand() % 6); CurrentHP -= std::max(5, fireDmg - Armor); dmgTexts.push_back({playerX, playerY - 60, fireDmg, 30}); bossBullets.erase(bossBullets.begin() + i); i--; dmgC = 30; } }
+            for(auto &e : enemies) { if(!e.active) continue; e.flip = (e.x < playerX); if (e.x > playerX + 60) e.x -= e.speed; else if (e.x < playerX - 60) e.x += e.speed; int hitDist = (e.type == 3) ? 100 : 70; if (std::abs(playerX - e.x) < hitDist && dmgC <= 0 && !isJumping) { int rawDmg = e.isBoss ? (27 + rand()%4) : (10 + rand()%4); int finalDmg = std::max(5, rawDmg - Armor); CurrentHP -= finalDmg; dmgTexts.push_back({playerX, playerY - 40, finalDmg, 40}); int dice = rand() % 100; if (dice < 45 && !isJumping) { isJumping = true; jumpV = -10; jumpState = JUMP_UP; } if (dice < 35) kbV = (playerX > e.x) ? 22.0f : -22.0f; dmgC = 60; isHealing = false; } }
+            for (int i = 0; i < (int)dmgTexts.size(); i++) { dmgTexts[i].y -= 2; dmgTexts[i].life--; if (dmgTexts[i].life <= 0) { dmgTexts.erase(dmgTexts.begin() + i); i--; } }
+            if(!enemies.size() || std::all_of(enemies.begin(), enemies.end(), [](const Enemy& e){return !e.active;})) { int rType = (rand() % 3) + 1; spawn(rand()%2?0:600, 200, 1.6f, rType); }
+            if (CurrentHP <= 0) { CurrentHP = MaxHP; Gold = std::max(0, Gold-10); playerX = 300; playerY = 730; kbV = 0; bossBullets.clear(); }
+        }
+
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255); SDL_RenderClear(ren); 
+        
+        if (backgroundTex) {
+            SDL_Rect bgRect = {0, 0, 750, 850}; 
+            SDL_RenderCopy(ren, backgroundTex, NULL, &bgRect);
+        }
+
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255); SDL_RenderDrawLine(ren, 0, 800, 600, 800);
+        drawPlayer(ren, playerX, playerY, isAtk, hasSword, walkCycle, Armor, isJumping);
+        for(auto &e : enemies) if(e.active) drawMonster(ren, e);
+        for(auto &b : bossBullets) { int fFrame = (SDL_GetTicks() / 100) % 5; SDL_Rect r = {(int)b.x - 100, (int)b.y - 100, 200, 200}; double angle = (atan2(b.vy, b.vx) * 180.0 / 3.14159) + 180.0; if(fireTex[fFrame]) SDL_RenderCopyEx(ren, fireTex[fFrame], NULL, &r, angle, NULL, SDL_FLIP_NONE); }
+        for (auto& dt : dmgTexts) drawNum(ren, dt.value, (int)dt.x, (int)dt.y, 8, {255, 0, 0});
+        drawBox(ren, 10, 110, (int)(150.0f * CurrentHP / MaxHP), 20, {255,0,0}); drawNum(ren, CurrentHP, 170, 110, 7, {255,0,0});
+        drawBox(ren, 10, 140, (int)(150.0f * CurrentEnergy / MaxEnergy), 20, {0,0,255}); drawNum(ren, CurrentEnergy, 170, 140, 7, {0,0,255});
+        drawBox(ren, 220, 20, 150, 70, {150,0,0}); drawString(ren, "SHOP", 255, 45, 10, {255,255,255});
+        drawBox(ren, 400, 20, 180, 70, {212,175,55}); drawNum(ren, Gold, 420, 35, 10, {255,255,255});
+        if (isShopOpen) { drawBox(ren, 40, 240, 520, 480, {50,40,40}); for(int i=0; i<(int)shopItems.size(); i++) { int y = 280 + i*95 + shopScrollY; if (y > 240 && y < 650) { drawBox(ren, 80, y, 440, 85, shopItems[i].col); drawString(ren, shopItems[i].name, 100, y+15, 12, {255,255,255}); drawNum(ren, shopItems[i].price, 100, y+45, 8, {255,255,0}); } } drawBox(ren, 80, 720, 440, 60, {0,0,0}); drawChar(ren, 'X', 290, 735, 25, {255,0,0}); }
+        drawBox(ren, 10, 830, 220, 100, {120,120,120}); drawBox(ren, 240, 830, 120, 100, {80,80,80}); 
+        drawBox(ren, 370, 830, 220, 100, {120,120,120}); drawBox(ren, 310, 955, 280, 200, {0,0,0}); 
+        SDL_RenderPresent(ren); SDL_Delay(16);
+    }
+    SDL_Quit(); return 0;
 }
-
-/* Bounce at map limits */
-
-void layer_limit_bounce(layer_t *lr)
-{
-	lr->flags |= TL_LIMIT_BOUNCE;
-}
-
-/*
- * Link the position of this layer to another layer, w/ scale ratio
- */
-void layer_link(layer_t *lr, layer_t *to_lr, float ratio)
-{
-	lr->flags |= TL_LINKED;
-	lr->link = to_lr;
-	lr->ratio = ratio;
-}
-
-/*
- * Render layer to the specified surface,
- * clipping to the specified rectangle
- *
- * This version is slightly improved over the 
- * one in "Parallax 3"; it combines horizontal
- * runs of transparent and partially transparent
- * tiles before recursing down.
- */
-void layer_render(layer_t *lr, SDL_Surface *screen, SDL_Rect *rect)
-{
-	int		max_x, max_y;
-	int		map_pos_x, map_pos_y;
-	int		mx, my, mx_start;
-	int		fine_x, fine_y;
-	SDL_Rect	pos;
-	SDL_Rect	local_clip;
-
-	/*
-	 * Set up clipping
-	 * (Note that we must first clip "rect" to the
-	 * current cliprect of the screen - or we'll screw
-	 * clipping up as soon as we have more than two
-	 * layers!)
-	 */
-	if(rect)
-	{
-		pos = screen->clip_rect;
-		local_clip = *rect;
-		/* Convert to (x2,y2) */
-		pos.w += pos.x;
-		pos.h += pos.y;
-		local_clip.w += local_clip.x;
-		local_clip.h += local_clip.y;
-		if(local_clip.x < pos.x)
-			local_clip.x = pos.x;
-		if(local_clip.y < pos.y)
-			local_clip.y = pos.y;
-		if(local_clip.w > pos.w)
-			local_clip.w = pos.w;
-		if(local_clip.h > pos.h)
-			local_clip.h = pos.h;
-		/* Convert result back to w, h */
-		local_clip.w -= local_clip.x;
-		local_clip.h -= local_clip.y;
-		/* Check if we actually have an area left! */
-		if( (local_clip.w <= 0) || (local_clip.h <= 0) )
-			return;
-		/* Set the final clip rect */
-		SDL_SetClipRect(screen, &local_clip);
-	}
-	else
-	{
-		SDL_SetClipRect(screen, NULL);
-		local_clip = screen->clip_rect;
-	}
-
-	/* Position of clip rect in map space */
-	map_pos_x = (int)lr->pos_x + screen->clip_rect.x;
-	map_pos_y = (int)lr->pos_y + screen->clip_rect.y;
-
-	/* The calculations would break with negative map coords... */
-	if(map_pos_x < 0)
-		map_pos_x += MAP_W*TILE_W*(-map_pos_x/(MAP_W*TILE_W)+1);
-	if(map_pos_y < 0)
-		map_pos_y += MAP_H*TILE_H*(-map_pos_y/(MAP_H*TILE_H)+1);
-
-	/* Position on map in tiles */
-	mx = map_pos_x / TILE_W;
-	my = map_pos_y / TILE_H;
-
-	/* Fine position - pixel offset; up to (1 tile - 1 pixel) */
-	fine_x = map_pos_x % TILE_W;
-	fine_y = map_pos_y % TILE_H;
-
-	/* Draw all visible tiles */
-	max_x = screen->clip_rect.x + screen->clip_rect.w;
-	max_y = screen->clip_rect.y + screen->clip_rect.h;
-	mx_start = mx;
-	pos.h = TILE_H;
-	for(pos.y = screen->clip_rect.y - fine_y;
-			pos.y < max_y; pos.y += TILE_H)
-	{
-		mx = mx_start;
-		my %= MAP_H;
-		for(pos.x = screen->clip_rect.x - fine_x;
-				pos.x < max_x; )
-		{
-			int	tile, tm, run_w;
-			mx %= MAP_W;
-			tile = (*lr->map)[my][mx];
-			tm = tile_mode(tile);
-
-			/* Calculate run length
-			 * ('tm' will tell what kind of run it is)
-			 */
-			run_w = 1;
-			if(detect_runs)
-			  while(pos.x + run_w*TILE_W < max_x)
-			  {
-				int tt = (*lr->map)[my]
-						[(mx + run_w) % MAP_W];
-				tt = tile_mode(tt);
-				if(tt != TM_OPAQUE)
-					tt = TM_EMPTY;
-				if(tm != tt)
-					break;
-				++run_w;
-			  }
-
-			/* Recurse to next layer */
-			if((tm != TM_OPAQUE) && lr->next)
-			{
-				++lr->recursions;
-				pos.w = run_w * TILE_W;
-				/* !!! Recursive call !!! !*/
-				layer_render(lr->next, screen, &pos);
-				SDL_SetClipRect(screen, &local_clip);
-			}
-
-			/* Render our tiles */
-			pos.w = TILE_W;
-			while(run_w--)
-			{
-				mx %= MAP_W;
-				tile = (*lr->map)[my][mx];
-				tm = tile_mode(tile);
-				if(tm != TM_EMPTY)
-				{
-					SDL_Surface *tiles;
-					if(tm == TM_OPAQUE)
-						tiles = lr->opaque_tiles;
-					else
-						tiles = lr->tiles;
-					++lr->blits;
-					lr->pixels += draw_tile(screen, tiles,
-							pos.x, pos.y, tile);
-				}
-				++mx;
-				pos.x += TILE_W;
-			}
-		}
-		++my;
-	}
-}
-
-void layer_reset_stats(layer_t *lr)
-{
-	lr->blits = 0;
-	lr->recursions = 0;
-	lr->pixels = 0;
-}
-
-
-/*----------------------------------------------------------
-	EOF
-----------------------------------------------------------*/
