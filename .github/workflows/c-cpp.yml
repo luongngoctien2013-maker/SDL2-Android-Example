@@ -10,10 +10,15 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
       - name: Build with Gradle
-        run: chmod +x gradlew && ./gradlew assembleDebug
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v3
         with:
-          name: game-nguoi-que
+          name: game-cua-ban
           path: app/build/outputs/apk/debug/*.apk
+          
